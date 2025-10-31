@@ -2,14 +2,13 @@
 import puppeteer from "puppeteer";
 import fs from "fs/promises";
 
-process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0"; // node-level: отключаем проверку SSL для нативных https-запросов (внимание: только если вы доверяете источнику)
+process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
 
 const START_URLS = ["https://rasp.bukep.ru/Default.aspx?idFil=10006&tr=1", "https://rasp.bukep.ru/Default.aspx?idFil=10006&tr=2"];
-// const START_URLS = ["https://rasp.bukep.ru/Default.aspx?idFil=10006&tr=1"]; // Для тестирования tr1
 
 const NAV_TIMEOUT = 20_000; // ms
-const OUTPUT_FILE_TR1 = "parsed_data_tr1.json"; // имя файла для сохранения результатов tr1
-const OUTPUT_FILE_TR2 = "parsed_data_tr2.json"; // имя файла для сохранения результатов tr2
+const OUTPUT_FILE_TR1 = "parsed_data_tr1.json";
+const OUTPUT_FILE_TR2 = "parsed_data_tr2.json";
 
 // Функция для парсинга таблицы расписания
 async function parseScheduleTable(page) {
@@ -32,6 +31,16 @@ async function parseScheduleTable(page) {
 			console.log(`  -> Найдено ${tables.length} таблиц(ы) расписания.`);
 			const allLessons = [];
 
+			// Функция для очистки lessonType: оставляем только буквы (рус/лат) и пробелы
+			const sanitizeLessonType = (s) => {
+				if (!s) return "";
+				// Удаляем всё, что не буквы и не пробелы (включая цифры и знаки припинания), затем сжимаем пробелы
+				return s
+					.replace(/[^A-Za-zА-Яа-яЁё\s]+/g, " ")
+					.replace(/\s+/g, " ")
+					.trim();
+			};
+
 			tables.forEach((table, tableIndex) => {
 				console.log(`  -> Обрабатываю таблицу ${tableIndex + 1}`);
 				const rows = table.querySelectorAll("tr");
@@ -53,7 +62,9 @@ async function parseScheduleTable(page) {
 
 					if (numParaCell && paraCell) {
 						// Извлекаем время/номер пары из td.num_para
-						const lessonTime = (numParaCell.innerText || "").trim();
+						// Сохраняем innerHTML и нормализуем <br> в единый формат "<br>" — чтобы сохранить разрыв как HTML
+						const rawLessonTimeHtml = numParaCell.innerHTML || "";
+						const lessonTime = rawLessonTimeHtml.replace(/<br\s*\/?>(\s*)/gi, "<br>").trim();
 
 						const lessonInfo = paraCell.querySelector("span");
 						// Сохраняем HTML-контент с <br> тегами
@@ -67,7 +78,7 @@ async function parseScheduleTable(page) {
 
 						// Разделяем HTML-контент по тегам <br>
 						const lines = lessonHtml
-							.split(/<br\s*\/?>/gi) // Разбиваем по <br> и <br/>
+							.split(/<br\s*\/?\>/gi) // Разбиваем по <br> и <br/>
 							.map((line) => line.trim())
 							.filter((line) => line);
 
@@ -109,6 +120,9 @@ async function parseScheduleTable(page) {
 									room = "";
 								}
 							}
+
+							// Очищаем lessonType: оставляем только буквы и пробелы
+							lessonType = sanitizeLessonType(lessonType);
 						} else if (lines.length === 1) {
 							// Если только одна строка, то весь текст - это subject
 							const tempDiv = document.createElement("div");
@@ -176,13 +190,34 @@ async function deepParsePage(page, startUrl, currentLevel = 1, maxLevel = 5) {
 		}
 
 		try {
-			// Экранируем ID для корректного CSS селектора
-			const escapedId = link.id.replace(/[!"#$%&'()*+,.\/:;<=>?@[\\\]^`{|}~]/g, "\\$&");
+			// Экранируем ID для корректного CSS селектора.
+			// Сначала пробуем воспользоваться CSS.escape в контексте страницы (корректно обрабатывает пробелы и non-ASCII).
+			let escapedId;
+			try {
+				escapedId = await page.evaluate((id) => {
+					if (typeof CSS !== "undefined" && typeof CSS.escape === "function") return CSS.escape(id);
+					// fallback: экранируем отдельные специальные символы и пробел
+					return id.replace(/([!"#$%&'()*+,./:;<=>?@[\\\\\]^`{|}~\s])/g, "\\$1");
+				}, link.id);
+			} catch (e) {
+				// На случай, если page.evaluate упадёт — используем локальный fallback
+				escapedId = link.id.replace(/([!"#$%&'()*+,./:;<=>?@[\\\\\]^`{|}~\s])/g, "\\$1");
+			}
+
 			console.log(`     Ищу элемент с ID: #${escapedId}`);
-			const elHandle = await page.$(`#${escapedId}`);
+			// Используем let, т.к. может понадобиться переназначение после перезагрузки страницы
+			let elHandle = await page.$(`#${escapedId}`);
 			if (!elHandle) {
-				console.warn(`     Пропускаю ссылку "${link.text}" - элемент с ID #${escapedId} не найден в DOM!`);
-				continue; // <-- Это место, где могут пропускаться элементы
+				console.warn(`     Элемент с ID #${escapedId} не найден. Пытаюсь перезагрузить страницу.`);
+				await page.reload({ waitUntil: "domcontentloaded", timeout: NAV_TIMEOUT }).catch(() => {});
+				console.log(`     Страница перезагружена. Повторно ищу элемент с ID: #${escapedId}`);
+				elHandle = await page.$(`#${escapedId}`);
+				if (!elHandle) {
+					console.warn(`     Пропускаю ссылку "${link.text}" - элемент с ID #${escapedId} не найден после перезагрузки.`);
+					continue; // <-- Теперь пропускаем только после перезагрузки
+				} else {
+					console.log(`     Элемент найден после перезагрузки.`);
+				}
 			}
 
 			console.log(`     Элемент найден. Начинаю клик.`);
@@ -203,6 +238,7 @@ async function deepParsePage(page, startUrl, currentLevel = 1, maxLevel = 5) {
 			await new Promise((resolve) => setTimeout(resolve, 500)); // Ждем 500мс после навигации
 
 			const result = {
+				from: startUrl,
 				level: currentLevel,
 				clickedText: link.text,
 				landedUrl: page.url(),
@@ -295,6 +331,12 @@ export async function GET() {
 
 				console.log(`  -> Найдено ${postbackLinks.length} ссылок для клика на tr2.`);
 
+				// Для совместимости с кодом, который ожидал currentLevel/maxLevel/results,
+				// объявляем их здесь: tr2 — это уровень 1, результаты складываем в tr2Results.
+				const currentLevel = 1;
+				const maxLevel = 1;
+				let results = tr2Results;
+
 				for (const [index, link] of postbackLinks.entries()) {
 					console.log(`\n  Обрабатываю ссылку tr2 ${index + 1}/${postbackLinks.length}: "${link.text}" (ID: ${link.id})`);
 
@@ -304,14 +346,23 @@ export async function GET() {
 					}
 
 					try {
-						// Экранируем ID для корректного CSS селектора
-						const escapedId = link.id.replace(/[!"#$%&'()*+,.\/:;<=>?@[\\\]^`{|}~]/g, "\\$&");
+						// Экранируем ID для корректного CSS селектора (используем CSS.escape в контексте страницы с fallback).
+						let escapedId;
+						try {
+							escapedId = await page.evaluate((id) => {
+								if (typeof CSS !== "undefined" && typeof CSS.escape === "function") return CSS.escape(id);
+								return id.replace(/([!"#$%&'()*+,./:;<=>?@[\\\\\]^`{|}~\s])/g, "\\$1");
+							}, link.id);
+						} catch (e) {
+							escapedId = link.id.replace(/([!"#$%&'()*+,./:;<=>?@[\\\\\]^`{|}~\s])/g, "\\$1");
+						}
+
 						console.log(`     Ищу элемент с ID: #${escapedId}`);
 						let elHandle = await page.$(`#${escapedId}`); // Используем let, чтобы можно было переназначить
 
 						if (!elHandle) {
 							console.warn(`     Элемент с ID #${escapedId} не найден. Пытаюсь перезагрузить страницу.`);
-							await page.reload({ waitUntil: "domcontentloaded", timeout: NAV_TIMEOUT }); // Перезагружаем
+							await page.reload({ waitUntil: "domcontentloaded", timeout: NAV_TIMEOUT }).catch(() => {}); // Перезагружаем
 							console.log(`     Страница перезагружена. Повторно ищу элемент с ID: #${escapedId}`);
 							elHandle = await page.$(`#${escapedId}`); // Повторный поиск
 
