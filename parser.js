@@ -4,11 +4,10 @@ import fs from "fs/promises";
 
 process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
 
-const START_URLS = ["https://rasp.bukep.ru/Default.aspx?idFil=10006&tr=1", "https://rasp.bukep.ru/Default.aspx?idFil=10006&tr=2"];
+const START_URLS = ["https://rasp.bukep.ru/Default.aspx?idFil=10006&tr=1"];
 
 const NAV_TIMEOUT = 20_000; // ms
 const OUTPUT_FILE_TR1 = "parsed_data_tr1.json";
-const OUTPUT_FILE_TR2 = "parsed_data_tr2.json";
 
 // Функция для парсинга таблицы расписания
 async function parseScheduleTable(page) {
@@ -254,7 +253,7 @@ async function deepParsePage(page, startUrl, currentLevel = 1, maxLevel = 5) {
 
 			results.push(result);
 
-			// Если это не максимальный уровень и мы парсим tr1 (не tr2), продолжаем парсинг
+			// Если это не максимальный уровень и мы парсим tr1, продолжаем парсинг
 			const isTr1 = startUrl.includes("tr=1") || startUrl.includes("tr=s") || startUrl.includes("tr=k");
 			if (currentLevel < maxLevel && isTr1) {
 				console.log(`     -> Рекурсивный вызов для уровня ${currentLevel + 1} для: ${link.text}`);
@@ -308,7 +307,6 @@ export async function GET() {
 		const page = await browser.newPage();
 		// на будущее: можно настроить userAgent, viewport и т.д.
 		const tr1Results = [];
-		const tr2Results = [];
 
 		for (const startUrl of START_URLS) {
 			console.log(`\n=== НАЧИНАЮ ОБРАБОТКУ URL: ${startUrl} ===`);
@@ -318,123 +316,6 @@ export async function GET() {
 				console.log("Парсинг tr1 с глубоким проходом...");
 				const results = await deepParsePage(page, startUrl, 0, 4);
 				tr1Results.push(...results);
-			} else if (startUrl.includes("tr=2")) {
-				console.log("Парсинг tr2 (только первый уровень)...");
-				// Для tr2 пока оставляем простой парсинг без глубокого прохода
-				const postbackLinks = await page.$$eval("a[href^='javascript:__doPostBack']", (nodes) =>
-					nodes.map((a) => ({
-						id: a.getAttribute("id") || "",
-						text: a.textContent?.trim() || "",
-						href: a.getAttribute("href") || "",
-					}))
-				);
-
-				console.log(`  -> Найдено ${postbackLinks.length} ссылок для клика на tr2.`);
-
-				// Для совместимости с кодом, который ожидал currentLevel/maxLevel/results,
-				// объявляем их здесь: tr2 — это уровень 1, результаты складываем в tr2Results.
-				const currentLevel = 1;
-				const maxLevel = 1;
-				let results = tr2Results;
-
-				for (const [index, link] of postbackLinks.entries()) {
-					console.log(`\n  Обрабатываю ссылку tr2 ${index + 1}/${postbackLinks.length}: "${link.text}" (ID: ${link.id})`);
-
-					if (!link.id) {
-						console.warn(`     Пропускаю ссылку tr2 "${link.text}" - отсутствует ID.`);
-						continue; // <-- Это место, где могут пропускаться элементы
-					}
-
-					try {
-						// Экранируем ID для корректного CSS селектора (используем CSS.escape в контексте страницы с fallback).
-						let escapedId;
-						try {
-							escapedId = await page.evaluate((id) => {
-								if (typeof CSS !== "undefined" && typeof CSS.escape === "function") return CSS.escape(id);
-								return id.replace(/([!"#$%&'()*+,./:;<=>?@[\\\\\]^`{|}~\s])/g, "\\$1");
-							}, link.id);
-						} catch (e) {
-							escapedId = link.id.replace(/([!"#$%&'()*+,./:;<=>?@[\\\\\]^`{|}~\s])/g, "\\$1");
-						}
-
-						console.log(`     Ищу элемент с ID: #${escapedId}`);
-						let elHandle = await page.$(`#${escapedId}`); // Используем let, чтобы можно было переназначить
-
-						if (!elHandle) {
-							console.warn(`     Элемент с ID #${escapedId} не найден. Пытаюсь перезагрузить страницу.`);
-							await page.reload({ waitUntil: "domcontentloaded", timeout: NAV_TIMEOUT }).catch(() => {}); // Перезагружаем
-							console.log(`     Страница перезагружена. Повторно ищу элемент с ID: #${escapedId}`);
-							elHandle = await page.$(`#${escapedId}`); // Повторный поиск
-
-							if (!elHandle) {
-								console.warn(`     Пропускаю ссылку "${link.text}" - элемент с ID #${escapedId} не найден после перезагрузки.`);
-								continue; // <-- Теперь пропускаем только после перезагрузки
-							} else {
-								console.log(`     Элемент найден после перезагрузки.`);
-							}
-						}
-
-						console.log(`     Элемент найден. Начинаю клик.`);
-
-						const navigationPromise = page.waitForNavigation({ waitUntil: "domcontentloaded", timeout: NAV_TIMEOUT }).catch(() => null);
-						await elHandle.click();
-						console.log(`     Клик выполнен. Ожидаю навигацию...`);
-						const navResult = await navigationPromise;
-						if (!navResult) {
-							console.warn(
-								`     ВНИМАНИЕ: Ожидание навигации для "${
-									link.text
-								}" завершено по таймауту (${NAV_TIMEOUT}ms) или произошла ошибка. Текущий URL: ${page.url()}`
-							);
-						} else {
-							console.log(`     Навигация успешна. Новый URL: ${page.url()}`);
-						}
-
-						const result = {
-							level: currentLevel,
-							clickedText: link.text,
-							landedUrl: page.url(),
-						};
-
-						if (currentLevel === 4) {
-							// Используем уровень 4 для расписания
-							console.log(`     -> Парсинг расписания для группы: ${link.text}`);
-							const scheduleData = await parseScheduleTable(page);
-							result.schedule = scheduleData;
-							console.log(`     <- Расписание: ${scheduleData.message}, найдено занятий: ${scheduleData.lessons.length}`);
-						}
-
-						results.push(result);
-
-						const isTr1 = startUrl.includes("tr=1") || startUrl.includes("tr=s") || startUrl.includes("tr=k");
-						if (currentLevel < maxLevel && isTr1) {
-							console.log(`     -> Рекурсивный вызов для уровня ${currentLevel + 1} для: ${link.text}`);
-							const deepResults = await deepParsePage(page, page.url(), currentLevel + 1, maxLevel);
-							results.push(...deepResults);
-							console.log(`     <- Рекурсивный вызов для уровня ${currentLevel + 1} завершен.`);
-						}
-
-						// Возвращаемся к запомненному начальному URL для *этого* уровня
-						console.log(`     Пытаюсь вернуться к начальному URL уровня ${currentLevel}: ${startUrl}`);
-						await page.goto(startUrl, { waitUntil: "domcontentloaded", timeout: NAV_TIMEOUT }).catch(() => {
-							console.warn(`     Ошибка при возврате к начальному URL уровня ${currentLevel}. Пытаюсь снова.`);
-							return page.goto(startUrl, { waitUntil: "domcontentloaded", timeout: NAV_TIMEOUT }).catch(() => {
-								throw new Error(`Не удалось вернуться к стартовому URL уровня ${currentLevel} после нескольких попыток: ${startUrl}`);
-							});
-						});
-						console.log(`     Успешно вернулся к начальному URL уровня ${currentLevel}. Текущий URL: ${page.url()}`);
-					} catch (err) {
-						console.warn("     Ошибка при обработке ссылки", link.text, ":", err.message || err);
-						console.log(`     Пытаюсь восстановить состояние, возвращаясь к начальному URL уровня ${currentLevel}: ${startUrl}`);
-						try {
-							await page.goto(startUrl, { waitUntil: "domcontentloaded", timeout: NAV_TIMEOUT });
-							console.log(`     Восстановление завершено. Текущий URL: ${page.url()}`);
-						} catch (restoreErr) {
-							console.error(`     Критическая ошибка при восстановлении состояния: ${restoreErr.message || restoreErr}`);
-							throw restoreErr;
-						}
-					}
-				}
 			}
 			console.log(`=== ЗАВЕРШЕНА ОБРАБОТКА URL: ${startUrl} ===`);
 		}
@@ -444,8 +325,7 @@ export async function GET() {
 		return {
 			ok: true,
 			tr1Results,
-			tr2Results,
-			totalResults: tr1Results.length + tr2Results.length,
+			totalResults: tr1Results.length,
 		};
 	} catch (error) {
 		if (browser) await browser.close().catch(() => {});
@@ -478,7 +358,6 @@ async function main() {
 		if (result.ok) {
 			console.log(`Получено ${result.totalResults} результатов`);
 			console.log(`- tr1: ${result.tr1Results.length} результатов`);
-			console.log(`- tr2: ${result.tr2Results.length} результатов`);
 
 			// Сохраняем результаты tr1 в отдельный JSON файл
 			if (result.tr1Results.length > 0) {
@@ -487,16 +366,6 @@ async function main() {
 					console.log(`Результаты tr1 сохранены в файл: ${OUTPUT_FILE_TR1}`);
 				} else {
 					console.error("Ошибка при сохранении результатов tr1");
-				}
-			}
-
-			// Сохраняем результаты tr2 в отдельный JSON файл
-			if (result.tr2Results.length > 0) {
-				const saveTr2Success = await saveToJSON(result.tr2Results, OUTPUT_FILE_TR2);
-				if (saveTr2Success) {
-					console.log(`Результаты tr2 сохранены в файл: ${OUTPUT_FILE_TR2}`);
-				} else {
-					console.error("Ошибка при сохранении результатов tr2");
 				}
 			}
 
@@ -514,14 +383,6 @@ async function main() {
 							console.log(`   Пример занятия: ${JSON.stringify(item.schedule.lessons[0], null, 2)}`);
 						}
 					}
-				});
-			}
-
-			// Выводим краткую статистику для tr2
-			if (result.tr2Results.length > 0) {
-				console.log("\nСтатистика tr2:");
-				result.tr2Results.forEach((item, index) => {
-					console.log(`${index + 1}. ${item.clickedText} -> ${item.landedUrl}`);
 				});
 			}
 		} else {
