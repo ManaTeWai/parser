@@ -14,167 +14,121 @@ const OUTPUT_FILE_TR2 = "parsed_data_tr2.json";
 async function parseScheduleTableTR2(page) {
 	try {
 		console.log("  -> Начинаю парсинг таблицы расписания (tr=2) на странице:", page.url());
-		// Проверяем, есть ли лейбл "Расписание отсутствует"
-		const noScheduleLabel = await page.$eval("#ctl00_head_Label1", (el) => el.textContent?.trim()).catch(() => null);
 
+		// Проверяем наличие лейбла "Расписание отсутствует"
+		const noScheduleLabel = await page.$eval("#ctl00_head_Label1", el => el.textContent?.trim()).catch(() => null);
 		if (noScheduleLabel && noScheduleLabel.includes("Расписание отсутствует")) {
 			console.log("  <- Расписание отсутствует на странице:", page.url());
 			return {
 				hasSchedule: false,
 				message: "Расписание отсутствует",
-				lessons: [],
+				currentWeek: [],
+				nextWeek: [],
 			};
 		}
 
-		// Парсим таблицы расписания
-		const scheduleData = await page.$$eval("table.tbl_day", (tables) => {
-			console.log(`  -> Найдено ${tables.length} таблиц(ы) расписания.`);
-			const allLessons = [];
+		// Весь парсинг — внутри evaluate, чтобы не терялись функции
+		const scheduleData = await page.evaluate(() => {
+			// утилита
+			const sanitizeLessonType = (s) =>
+				s ? s.replace(/[^A-Za-zА-Яа-яЁё\s]+/g, " ").replace(/\s+/g, " ").trim() : "";
 
-			// Функция для очистки lessonType: оставляем только буквы (рус/лат) и пробелы
-			const sanitizeLessonType = (s) => {
-				if (!s) return "";
-				// Удаляем всё, что не буквы и не пробелы (включая цифры и знаки припинания), затем сжимаем пробелы
-				return s
-					.replace(/[^A-Za-zА-Яа-яЁё\s]+/g, " ")
-					.replace(/\s+/g, " ")
-					.trim();
-			};
+			// локальная функция парсинга недели
+			const parseWeek = (rootId) => {
+				const root = document.querySelector(`#${rootId}`);
+				if (!root) return [];
 
-			tables.forEach((table, tableIndex) => {
-				console.log(`  -> Обрабатываю таблицу ${tableIndex + 1}`);
-				const rows = table.querySelectorAll("tr");
-				let currentDay = "";
+				const weekLessons = [];
+				const tables = root.querySelectorAll("table.tbl_day");
 
-				rows.forEach((row, rowIndex) => {
-					// Проверяем, является ли строка заголовком дня
-					if (row.classList && row.classList.contains("day")) {
-						const firstCell = row.querySelector("td");
-						currentDay = (firstCell?.textContent || "").trim();
-						console.log(`     Найден день: "${currentDay}"`);
-						return;
-					}
+				tables.forEach((table) => {
+					const rows = table.querySelectorAll("tr");
+					let currentDay = "";
 
-					// Парсим строки с занятиями
-					const numParaCell = row.querySelector("td.num_para");
-					const paraCell = row.querySelector("td.para");
+					rows.forEach((row) => {
+						if (row.classList.contains("day")) {
+							currentDay = row.textContent.trim();
+							return;
+						}
 
-					// Для tr=2 нет кнопки преподавателя, поэтому убираем её
-					// const teacherButton = row.querySelector("input.fioprep");
+						const numParaCell = row.querySelector("td.num_para");
+						const paraCell = row.querySelector("td.para");
+						if (!numParaCell || !paraCell) return;
 
-					if (numParaCell && paraCell) {
-						// Извлекаем время/номер пары из td.num_para
-						const rawLessonTimeHtml = numParaCell.innerHTML || "";
-						const lessonTime = rawLessonTimeHtml.replace(/<br\s*\/?>(\s*)/gi, "<br>").trim();
+						const lessonTime = (numParaCell.textContent || "").trim();
 
-						// Первый span содержит основную строку с <br>, второй span часто содержит номер аудитории
 						const spans = paraCell.querySelectorAll("span");
-						const lessonInfo = spans && spans.length > 0 ? spans[0] : null;
-						// Сохраняем HTML-контент с <br> тегами из первого span
-						const lessonHtml = lessonInfo ? lessonInfo.innerHTML || "" : "";
-						// Попробуем получить комнату из второго span (если есть)
-						const roomSpan = spans && spans.length > 1 ? spans[1] : null;
-						const roomFromSpan = roomSpan ? (roomSpan.innerText || roomSpan.textContent || "").trim() : "";
+						const lessonInfo = spans[0];
+						const roomSpan = spans[1];
 
 						let subject = "";
 						let lessonType = "";
-						let room = "";
-						let groups = []; // Новое поле для групп
+						let room = roomSpan ? roomSpan.textContent.trim() : "";
+						let groups = [];
 
-						// Разделяем HTML-контент по тегам <br>
-						const lines = lessonHtml
-							.split(/<br\s*\/?\>/gi) // Разбиваем по <br> и <br/>
-							.map((line) => line.trim())
-							.filter((line) => line);
+						if (lessonInfo) {
+							const lines = (lessonInfo.innerHTML || "")
+								.split(/<br\s*\/?>/gi)
+								.map(l => l.trim())
+								.filter(Boolean);
 
-						if (lines.length >= 2) {
-							// subject - первая строка
-							const tempDiv = document.createElement("div");
-							tempDiv.innerHTML = lines[0];
-							subject = tempDiv.innerText || tempDiv.textContent || "";
+							if (lines.length >= 2) {
+								subject = lines[0];
 
-							// Получаем все остальные строки после первой и объединяем их обратно в строку
-							const afterFirstLineHtml = lines.slice(1).join(" ").trim();
-							// Создаем временный div для получения чистого текста из оставшегося HTML
-							const tempDiv2 = document.createElement("div");
-							tempDiv2.innerHTML = afterFirstLineHtml;
-							const afterFirstLineText = tempDiv2.innerText || tempDiv2.textContent || "";
+								let after = lines.slice(1).join(" ");
+								const groupRegex = /([А-Яа-яЁёA-Za-z]+\s*-\s*[А-Яа-яЁёA-Za-z0-9]+)/g;
+								const foundGroups = after.match(groupRegex) || [];
+								groups = [...new Set(foundGroups)].map(g => g.trim());
+								foundGroups.forEach(g => {
+									const esc = g.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+									after = after.replace(new RegExp("\\s*,?\\s*" + esc + "\\s*,?", "gi"), " ").trim();
+								});
 
-							// Ищем группы: ищем шаблоны вроде "ЮР-С221оз, ЮР-С222оз" или "ЮР-С221оз"
-							const groupRegex = /([А-Яа-яЁёA-Za-z]+\s*-\s*[А-Яа-яЁёA-Za-z0-9]+)/g;
-							const foundGroups = afterFirstLineText.match(groupRegex) || [];
-							groups = [...new Set(foundGroups)].map((g) => g.trim());
-
-							// Оставшуюся часть строки (без групп) обрабатываем как раньше для lessonType и room
-							let remainingText = afterFirstLineText;
-							foundGroups.forEach((group) => {
-								const escapedGroup = group.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-								remainingText = remainingText.replace(new RegExp("\\s*,?\\s*" + escapedGroup + "\\s*,?", "gi"), " ").trim();
-							});
-
-							// Проверяем на специальный случай 'ДСП "Спартак"'
-							if (remainingText.includes('ДСП "Спартак"')) {
-								const spartakIndex = remainingText.indexOf('ДСП "Спартак"');
-								lessonType = remainingText.substring(0, spartakIndex).replace(/\s+/g, " ").trim();
-								room = 'ДСП "Спартак"';
-							} else {
-								// Ищем последовательность цифр (1-3) в конце строки для room
-								const roomMatch = remainingText.match(/^(.+)\s+(\d{1,3})$/);
+								const roomMatch = after.match(/^(.+)\s+(\d{1,3})$/);
 								if (roomMatch) {
-									lessonType = roomMatch[1].trim();
-									room = roomMatch[2].trim();
+									lessonType = sanitizeLessonType(roomMatch[1]);
+									if (!room) room = roomMatch[2];
 								} else {
-									// Если нет числа в конце, то оставшийся текст - это lessonType
-									lessonType = remainingText;
-									room = "";
+									lessonType = sanitizeLessonType(after);
 								}
+							} else {
+								subject = lines[0];
 							}
-
-							// Если был второй span с комнатой — используем его как приоритет (если он не пустой)
-							if (roomFromSpan) {
-								room = roomFromSpan;
-							}
-
-							// Очищаем lessonType: оставляем только буквы и пробелы
-							lessonType = sanitizeLessonType(lessonType);
-						} else if (lines.length === 1) {
-							// Если только одна строка, то весь текст - это subject
-							const tempDiv = document.createElement("div");
-							tempDiv.innerHTML = lines[0];
-							subject = tempDiv.innerText || tempDiv.textContent || "";
 						}
 
-						allLessons.push({
+						weekLessons.push({
 							day: currentDay,
-							lessonTime: lessonTime,
-							subject: subject,
-							lessonType: lessonType,
-							room: room,
-							groups: groups, // Используем новое поле
+							lessonTime,
+							subject,
+							lessonType,
+							room,
+							groups,
 						});
-					} else {
-						// Добавлено: логирование, если строка не содержит num_para и para
-						console.log(`     Строка ${rowIndex} не содержит td.num_para или td.para, пропускаю.`);
-					}
+					});
 				});
-			});
+				return weekLessons;
+			};
 
-			console.log(`  <- Найдено ${allLessons.length} занятий.`);
-			return allLessons;
+			return {
+				currentWeek: parseWeek("tbl_page1"),
+				nextWeek: parseWeek("tbl_page2"),
+			};
 		});
 
-		console.log("  <- Парсинг таблицы расписания (tr=2) завершен.");
+		console.log(`  <- Текущая неделя: ${scheduleData.currentWeek.length} занятий, следующая: ${scheduleData.nextWeek.length}.`);
+
 		return {
 			hasSchedule: true,
 			message: "Расписание найдено",
-			lessons: scheduleData,
+			...scheduleData,
 		};
 	} catch (error) {
 		console.warn("Ошибка при парсинге расписания (tr=2):", error);
 		return {
 			hasSchedule: false,
 			message: "Ошибка парсинга",
-			lessons: [],
+			currentWeek: [],
+			nextWeek: [],
 		};
 	}
 }
