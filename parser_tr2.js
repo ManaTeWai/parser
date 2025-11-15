@@ -16,7 +16,7 @@ async function parseScheduleTableTR2(page) {
 		console.log("  -> Начинаю парсинг таблицы расписания (tr=2) на странице:", page.url());
 
 		// Проверяем наличие лейбла "Расписание отсутствует"
-		const noScheduleLabel = await page.$eval("#ctl00_head_Label1", el => el.textContent?.trim()).catch(() => null);
+		const noScheduleLabel = await page.$eval("#ctl00_head_Label1", (el) => el.textContent?.trim()).catch(() => null);
 		if (noScheduleLabel && noScheduleLabel.includes("Расписание отсутствует")) {
 			console.log("  <- Расписание отсутствует на странице:", page.url());
 			return {
@@ -31,7 +31,12 @@ async function parseScheduleTableTR2(page) {
 		const scheduleData = await page.evaluate(() => {
 			// утилита
 			const sanitizeLessonType = (s) =>
-				s ? s.replace(/[^A-Za-zА-Яа-яЁё\s]+/g, " ").replace(/\s+/g, " ").trim() : "";
+				s
+					? s
+							.replace(/[^A-Za-zА-Яа-яЁё\s]+/g, " ")
+							.replace(/\s+/g, " ")
+							.trim()
+					: "";
 
 			// локальная функция парсинга недели
 			const parseWeek = (rootId) => {
@@ -69,7 +74,7 @@ async function parseScheduleTableTR2(page) {
 						if (lessonInfo) {
 							const lines = (lessonInfo.innerHTML || "")
 								.split(/<br\s*\/?>/gi)
-								.map(l => l.trim())
+								.map((l) => l.trim())
 								.filter(Boolean);
 
 							if (lines.length >= 2) {
@@ -78,8 +83,8 @@ async function parseScheduleTableTR2(page) {
 								let after = lines.slice(1).join(" ");
 								const groupRegex = /([А-Яа-яЁёA-Za-z]+\s*-\s*[А-Яа-яЁёA-Za-z0-9]+)/g;
 								const foundGroups = after.match(groupRegex) || [];
-								groups = [...new Set(foundGroups)].map(g => g.trim());
-								foundGroups.forEach(g => {
+								groups = [...new Set(foundGroups)].map((g) => g.trim());
+								foundGroups.forEach((g) => {
 									const esc = g.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 									after = after.replace(new RegExp("\\s*,?\\s*" + esc + "\\s*,?", "gi"), " ").trim();
 								});
@@ -226,7 +231,9 @@ async function deepParsePage(page, startUrl, currentLevel = 1, maxLevel = 4, par
 					console.log(`     -> Парсинг расписания (обнаружен table.tbl_day или label) для: ${link.text}`);
 					const scheduleData = await parseScheduleFn(page);
 					result.schedule = scheduleData;
-					console.log(`     <- Расписание: ${scheduleData.message}, найдено занятий: ${scheduleData.lessons.length}`);
+					const totalLessons = (scheduleData.currentWeek?.length || 0) + (scheduleData.nextWeek?.length || 0);
+
+					console.log(`     <- Расписание: ${scheduleData.message}, занятий: ${totalLessons}`);
 				}
 			} catch (e) {
 				console.warn("     Не удалось проверить наличие расписания на странице:", e && e.message ? e.message : e);
@@ -276,7 +283,7 @@ export async function GET_TR2() {
 	try {
 		console.log("Запускаю браузер...");
 		browser = await puppeteer.launch({
-			headless: false, // Используйте true для headless режима
+			headless: true, // Используйте true для headless режима
 			ignoreHTTPSErrors: true, // Включаем игнор в puppeteer
 			args: [
 				"--no-sandbox",
@@ -360,10 +367,16 @@ async function main() {
 				result.tr2Results.forEach((item, index) => {
 					console.log(`${index + 1}. [Уровень ${item.level}] ${item.clickedText} -> ${item.landedUrl}`);
 					if (item.schedule && item.schedule.hasSchedule) {
-						console.log(`   Найдено занятий: ${item.schedule.lessons.length}`);
-						// Выводим пример одного занятия
-						if (item.schedule.lessons.length > 0) {
-							console.log(`   Пример занятия: ${JSON.stringify(item.schedule.lessons[0], null, 2)}`);
+						const total = (item.schedule.currentWeek?.length || 0) + (item.schedule.nextWeek?.length || 0);
+
+						console.log(
+							`   Всего занятий: ${total} (текущая: ${item.schedule.currentWeek?.length || 0}, следующая: ${item.schedule.nextWeek?.length || 0})`
+						);
+
+						const example = item.schedule.currentWeek?.[0] || item.schedule.nextWeek?.[0];
+
+						if (example) {
+							console.log(`   Пример занятия: ${JSON.stringify(example, null, 2)}`);
 						}
 					}
 				});
