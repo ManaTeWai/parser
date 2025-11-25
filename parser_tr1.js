@@ -302,7 +302,7 @@ export async function GET() {
 	try {
 		console.log("Запускаю браузер...");
 		browser = await puppeteer.launch({
-			headless: false, // Используйте true для headless режима
+			headless: true, // Используйте true для headless режима
 			ignoreHTTPSErrors: true, // Включаем игнор в puppeteer
 			args: [
 				"--no-sandbox",
