@@ -1,4 +1,3 @@
-// parser.js
 import puppeteer from "puppeteer";
 import fs from "fs/promises";
 
@@ -6,7 +5,7 @@ process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
 
 const START_URLS = ["https://rasp.bukep.ru/Default.aspx?idFil=10006&tr=1"];
 
-const NAV_TIMEOUT = 20_000; // ms
+const NAV_TIMEOUT = 20_000;
 const OUTPUT_FILE_TR1 = "parsed_data_tr1.json";
 
 // Функция для парсинга таблицы расписания
@@ -60,10 +59,22 @@ async function parseScheduleTable(page) {
 					const teacherButton = row.querySelector("input.fioprep");
 
 					if (numParaCell && paraCell) {
-						// Извлекаем время/номер пары из td.num_para
-						// Сохраняем innerHTML и нормализуем <br> в единый формат "<br>" — чтобы сохранить разрыв как HTML
+						// Извлекаем содержимое td.num_para
 						const rawLessonTimeHtml = numParaCell.innerHTML || "";
-						const lessonTime = rawLessonTimeHtml.replace(/<br\s*\/?>(\s*)/gi, "<br>").trim();
+						const numParaText = numParaCell.textContent || "";
+
+						// Определяем тип недели на основе содержимого num_para
+						let week = "both";
+						if (numParaText.includes("Числ.")) {
+							week = "num";
+						} else if (numParaText.includes("Знам.")) {
+							week = "den";
+						}
+
+						// Извлекаем только номер пары (цифры в начале строки)
+						// Например, из "1<br>Знам." -> "1", из "4<br>14:35" -> "4"
+						const lessonTimeMatch = rawLessonTimeHtml.match(/^(\d+)<br>/i);
+						const lessonTime = lessonTimeMatch ? lessonTimeMatch[1] : "";
 
 						const lessonInfo = paraCell.querySelector("span");
 						// Сохраняем HTML-контент с <br> тегами
@@ -131,7 +142,8 @@ async function parseScheduleTable(page) {
 
 						allLessons.push({
 							day: currentDay,
-							lessonTime: lessonTime,
+							week: week, // Добавлено поле week
+							lessonTime: lessonTime, // Теперь содержит только номер пары
 							subject: subject,
 							lessonType: lessonType,
 							room: room,
@@ -226,11 +238,7 @@ async function deepParsePage(page, startUrl, currentLevel = 1, maxLevel = 5) {
 			console.log(`     Клик выполнен. Ожидаю навигацию...`);
 			const navResult = await navigationPromise;
 			if (!navResult) {
-				console.warn(
-					`     ВНИМАНИЕ: Ожидание навигации для "${
-						link.text
-					}" завершено по таймауту (${NAV_TIMEOUT}ms) или произошла ошибка. Текущий URL: ${page.url()}`
-				);
+				console.warn(`     ВНИМАНИЕ: Ожидание навигации для "${link.text}" завершено по таймауту (${NAV_TIMEOUT}ms) или произошла ошибка. Текущий URL: ${page.url()}`);
 			} else {
 				console.log(`     Навигация успешна. Новый URL: ${page.url()}`);
 			}
@@ -294,7 +302,7 @@ export async function GET() {
 	try {
 		console.log("Запускаю браузер...");
 		browser = await puppeteer.launch({
-			headless: true, // Используйте true для headless режима
+			headless: false, // Используйте true для headless режима
 			ignoreHTTPSErrors: true, // Включаем игнор в puppeteer
 			args: [
 				"--no-sandbox",
