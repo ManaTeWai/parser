@@ -56,7 +56,7 @@ async function parseScheduleTable(page) {
 					// Парсим строки с занятиями
 					const numParaCell = row.querySelector("td.num_para");
 					const paraCell = row.querySelector("td.para");
-					const teacherButton = row.querySelector("input.fioprep");
+					const teacherButton = row.querySelector("input.fioprep, input.fioprep_hight");
 
 					if (numParaCell && paraCell) {
 						// Извлекаем содержимое td.num_para
