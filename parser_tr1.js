@@ -303,6 +303,7 @@ export async function GET() {
 		console.log("Запускаю браузер...");
 		browser = await puppeteer.launch({
 			headless: true, // Используйте true для headless режима
+			executablePath: '/usr/bin/chromium-browser',
 			ignoreHTTPSErrors: true, // Включаем игнор в puppeteer
 			args: [
 				"--no-sandbox",

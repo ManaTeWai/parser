@@ -198,11 +198,7 @@ async function deepParsePage(page, startUrl, currentLevel = 1, maxLevel = 4, par
 			console.log(`     Клик выполнен. Ожидаю навигацию...`);
 			const navResult = await navigationPromise;
 			if (!navResult) {
-				console.warn(
-					`     ВНИМАНИЕ: Ожидание навигации для "${
-						link.text
-					}" завершено по таймауту (${NAV_TIMEOUT}ms) или произошла ошибка. Текущий URL: ${page.url()}`
-				);
+				console.warn(`     ВНИМАНИЕ: Ожидание навигации для "${link.text}" завершено по таймауту (${NAV_TIMEOUT}ms) или произошла ошибка. Текущий URL: ${page.url()}`);
 				// Попытка подстраховки: если навигация не сработала, попробуем дождаться таблицы расписания или контента
 				try {
 					await page.waitForSelector("table.tbl_day", { timeout: 5000 });
@@ -284,6 +280,7 @@ export async function GET_TR2() {
 		console.log("Запускаю браузер...");
 		browser = await puppeteer.launch({
 			headless: true, // Используйте true для headless режима
+			executablePath: "/usr/bin/chromium-browser",
 			ignoreHTTPSErrors: true, // Включаем игнор в puppeteer
 			args: [
 				"--no-sandbox",
@@ -369,9 +366,7 @@ async function main() {
 					if (item.schedule && item.schedule.hasSchedule) {
 						const total = (item.schedule.currentWeek?.length || 0) + (item.schedule.nextWeek?.length || 0);
 
-						console.log(
-							`   Всего занятий: ${total} (текущая: ${item.schedule.currentWeek?.length || 0}, следующая: ${item.schedule.nextWeek?.length || 0})`
-						);
+						console.log(`   Всего занятий: ${total} (текущая: ${item.schedule.currentWeek?.length || 0}, следующая: ${item.schedule.nextWeek?.length || 0})`);
 
 						const example = item.schedule.currentWeek?.[0] || item.schedule.nextWeek?.[0];
 
