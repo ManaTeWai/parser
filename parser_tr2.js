@@ -280,7 +280,7 @@ export async function GET_TR2() {
 		console.log("Запускаю браузер...");
 		browser = await puppeteer.launch({
 			headless: true, // Используйте true для headless режима
-			executablePath: "/usr/bin/chromium-browser",
+			executablePath: "/usr/bin/chromium-browser", // Путь к вашему Chromium/Chrome
 			ignoreHTTPSErrors: true, // Включаем игнор в puppeteer
 			args: [
 				"--no-sandbox",
@@ -319,6 +319,12 @@ export async function GET_TR2() {
 		console.error("Критическая ошибка в GET_TR2:", error);
 		return { ok: false, error: error.message || String(error) };
 	}
+}
+
+// Поддержка аргумента --out
+const outIndex = process.argv.indexOf("--out");
+if (outIndex !== -1 && process.argv[outIndex + 1]) {
+	OUTPUT_FILE_TR1 = process.argv[outIndex + 1];
 }
 
 // Функция для записи данных в JSON файл
