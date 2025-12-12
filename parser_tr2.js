@@ -8,7 +8,7 @@ process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
 const START_URLS_TR2 = ["https://rasp.bukep.ru/Default.aspx?idFil=10006&tr=2"];
 
 const NAV_TIMEOUT = 60_000; // ms
-const OUTPUT_FILE_TR2 = "parsed_data_tr2.json";
+let OUTPUT_FILE_TR2 = "parsed_data_tr2.json";
 
 // Модифицированная функция для парсинга таблицы расписания для tr=2
 async function parseScheduleTableTR2(page) {

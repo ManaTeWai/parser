@@ -6,7 +6,7 @@ process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
 const START_URLS = ["https://rasp.bukep.ru/Default.aspx?idFil=10006&tr=1"];
 
 const NAV_TIMEOUT = 20_000;
-const OUTPUT_FILE_TR1 = "parsed_data_tr1.json";
+let OUTPUT_FILE_TR1 = "parsed_data_tr1.json";
 
 // Функция для парсинга таблицы расписания
 async function parseScheduleTable(page) {
