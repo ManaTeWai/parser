@@ -324,7 +324,7 @@ export async function GET_TR2() {
 // Поддержка аргумента --out
 const outIndex = process.argv.indexOf("--out");
 if (outIndex !== -1 && process.argv[outIndex + 1]) {
-	OUTPUT_FILE_TR1 = process.argv[outIndex + 1];
+	OUTPUT_FILE_TR2 = process.argv[outIndex + 1];
 }
 
 // Функция для записи данных в JSON файл
